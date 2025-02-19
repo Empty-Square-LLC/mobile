@@ -1,0 +1,182 @@
+name: Minimal
+
+on:
+  workflow_dispatch:
+    inputs:
+      ENVIRONMENT:
+        type: environment
+        required: true
+      BE_PLATFORM:
+        type: choice
+        options:
+        - android
+        - ios
+        required: true
+      BE_APP_VERSION_OVERRIDE:
+        type: string
+        required: false
+      BE_APP_BUILD_NUMBER_OVERRIDE:
+        type: string
+        required: false
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.ENVIRONMENT }}
+  #
+  BE_PLATFORM: ${{ github.event.inputs.BE_PLATFORM }}
+  BE_APP_VERSION_OVERRIDE: ${{ github.event.inputs.BE_APP_VERSION_OVERRIDE }}
+  BE_APP_BUILD_NUMBER_OVERRIDE: ${{ github.event.inputs.BE_APP_BUILD_NUMBER_OVERRIDE }}
+  BE_APP_PATH: ""
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: "${{ github.event.inputs.BE_PLATFORM == 'ios' && 'macos-14' || 'ubuntu-22.04' }}"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Switch to Node v20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.15"
+
+      - name: Set Python to v3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+
+      - name: Activate Proper Ruby Version
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3.0"
+
+      - name: Switch to Java v17
+        uses: actions/setup-java@v4
+        if: env.BE_PLATFORM == 'android'
+        with:
+          distribution: "oracle"  
+          java-version: "17"
+
+      - name: Set $BE_PREFIX and Update $PATH
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          echo "BE_PREFIX=$HOME/tools" >> $GITHUB_ENV
+          echo "$BE_PREFIX/bin" >> $GITHUB_PATH
+
+      - name: Install beplus CLI
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          npm install --location=global @beplus/be
+          be --version
+          be latest
+          $HOME/tools/bin/beplus --version
+
+      - name: Prepare Configuration .env
+        env:
+          BE_APP_NAME: ${{ vars.BE_APP_NAME }}
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          cd $GITHUB_WORKSPACE/$BE_APP_PATH
+          # $HOME/tools/bin/beplus config env --dotenv
+          echo "BE_APP_NAME=$BE_APP_NAME" >> .env
+
+      - name: Install the Dependencies
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          cd $GITHUB_WORKSPACE
+          npm install -g pnpm
+          pnpm install
+
+      - name: Install Bundler Dependencies
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          cd $GITHUB_WORKSPACE/$BE_APP_PATH
+          bundle install
+
+      - name: Install CocoaPods Dependencies
+        if: env.BE_PLATFORM == 'ios'
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          cd $GITHUB_WORKSPACE/$BE_APP_PATH/ios
+          bundle exec pod install
+
+      - name: Get the Android Upload Key
+        env:
+          BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_CONTENT: ${{ secrets.BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_CONTENT }}
+        if: env.BE_PLATFORM == 'android' && env.BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_CONTENT
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          echo -n $BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_CONTENT | base64 -d > $GITHUB_WORKSPACE/android/app/upload.keystore
+
+      - name: Set Android SDK Location
+        if: env.BE_PLATFORM == 'android'
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$GITHUB_WORKSPACE/$BE_APP_PATH/android/local.properties"
+
+      - name: Fastlane Match
+        if: env.BE_PLATFORM == 'ios'
+        env:
+          BE_APP_BUNDLE_ID: ${{ vars.BE_APP_BUNDLE_ID }}
+          BE_APPLE_DEVELOPER_TEAM_ID: ${{ vars.BE_APPLE_DEVELOPER_TEAM_ID }}
+          BE_APPSTORE_CONNECT_KEY_ID: ${{ vars.BE_APPSTORE_CONNECT_KEY_ID }}
+          BE_APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.BE_APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          BE_APPSTORE_CONNECT_KEY_CONTENT: ${{ secrets.BE_APPSTORE_CONNECT_KEY_CONTENT }}
+          BE_FASTLANE_MATCH_STORAGE: ${{ vars.BE_FASTLANE_MATCH_STORAGE }}
+          BE_FASTLANE_MATCH_STORAGE_GIT_URL: ${{ vars.BE_FASTLANE_MATCH_STORAGE_GIT_URL }}
+          BE_FASTLANE_MATCH_STORAGE_GIT_SSH_KEY_PRIVATE_CONTENT: ${{ secrets.BE_FASTLANE_MATCH_STORAGE_GIT_SSH_KEY_PRIVATE_CONTENT }}
+          MATCH_PASSWORD: ${{ secrets.BE_FASTLANE_MATCH_PASSWORD }}
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          cd $GITHUB_WORKSPACE/$BE_APP_PATH/$BE_PLATFORM
+          bundle exec fastlane signing_sync
+
+      - name: Process Versioning
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          export BE_APP_VERSION=$($HOME/tools/bin/beplus mobile get-version)
+          export BE_APP_BUILD_NUMBER=$($HOME/tools/bin/beplus mobile get-build-number)
+          echo "Version: $BE_APP_VERSION"
+          echo "Build Number: $BE_APP_BUILD_NUMBER"
+          echo "BE_APP_VERSION=$BE_APP_VERSION" >> $GITHUB_ENV
+          echo "BE_APP_BUILD_NUMBER=$BE_APP_BUILD_NUMBER" >> $GITHUB_ENV
+
+      - name: Fastlane Deploy
+        env:
+          BE_APP_BUNDLE_ID: ${{ vars.BE_APP_BUNDLE_ID }}
+          BE_APP_APPLE_ID: ${{ vars.BE_APP_APPLE_ID }}
+          BE_APP_APPLICATION_ID: ${{ vars.BE_APP_APPLICATION_ID }}
+          BE_APP_ANDROID_NAMESPACE: ${{ vars.BE_APP_ANDROID_NAMESPACE }}
+          BE_APPLE_DEVELOPER_TEAM_ID: ${{ vars.BE_APPLE_DEVELOPER_TEAM_ID }}
+          BE_APPLE_DEVELOPER_TEAM_NAME: ${{ vars.BE_APPLE_DEVELOPER_TEAM_NAME }}
+          BE_APPSTORE_CONNECT_KEY_ID: ${{ vars.BE_APPSTORE_CONNECT_KEY_ID }}
+          BE_APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.BE_APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          BE_APPSTORE_CONNECT_KEY_CONTENT: ${{ secrets.BE_APPSTORE_CONNECT_KEY_CONTENT }}
+          BE_FASTLANE_MATCH_STORAGE: ${{ vars.BE_FASTLANE_MATCH_STORAGE }}
+          BE_FASTLANE_MATCH_STORAGE_GIT_URL: ${{ vars.BE_FASTLANE_MATCH_STORAGE_GIT_URL }}
+          BE_FASTLANE_MATCH_STORAGE_GIT_SSH_KEY_PRIVATE_CONTENT: ${{ secrets.BE_FASTLANE_MATCH_STORAGE_GIT_SSH_KEY_PRIVATE_CONTENT }}
+          BE_GOOGLE_PLAY_JSON_KEY_CONTENT: ${{ secrets.BE_GOOGLE_PLAY_JSON_KEY_CONTENT }}
+          BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_PASSWORD: ${{ secrets.BE_GOOGLE_PLAY_UPLOAD_KEY_STORE_PASSWORD }}
+          BE_GOOGLE_PLAY_UPLOAD_KEY_ALIAS: ${{ secrets.BE_GOOGLE_PLAY_UPLOAD_KEY_ALIAS }}
+          BE_GOOGLE_PLAY_UPLOAD_KEY_PASSWORD: ${{ secrets.BE_GOOGLE_PLAY_UPLOAD_KEY_PASSWORD }}
+          MATCH_PASSWORD: ${{ secrets.BE_FASTLANE_MATCH_PASSWORD }}
+        run: |
+          #!/usr/bin/env bash
+          set -e -x -o pipefail
+          echo "Version: $BE_APP_VERSION"
+          echo "Build Number: $BE_APP_BUILD_NUMBER"
+          cd $GITHUB_WORKSPACE/$BE_APP_PATH/$BE_PLATFORM
+          bundle exec fastlane deploy env:$ENVIRONMENT
+
+

@@ -2,6 +2,10 @@
 
 skip_docs
 
+# Load environment variables from .env file
+require 'dotenv'
+Dotenv.load('../../.env') # Adjust this path if necessary
+
 envs = [
   { name: "dev", id_suffix: ".dev", build_type: "ReleaseDev" },
   { name: "stage", id_suffix: ".stage", build_type: "ReleaseStage" },
