@@ -98,6 +98,11 @@ jobs:
           set -e -x -o pipefail
           cd $GITHUB_WORKSPACE/$BE_APP_PATH
           bundle install
+      
+      - name: Update Hermes Engine in Pods
+        run: |
+          cd ios
+          pod update hermes-engine --no-repo-update
 
       - name: Install CocoaPods Dependencies
         if: env.BE_PLATFORM == 'ios'
