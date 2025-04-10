@@ -144,7 +144,7 @@ jobs:
           #!/usr/bin/env bash
           set -e -x -o pipefail
           cd $GITHUB_WORKSPACE/$BE_APP_PATH/$BE_PLATFORM
-          bundle exec fastlane signing_sync
+          bundle exec fastlane signing_sync --verbose
 
       - name: Process Versioning
         run: |
